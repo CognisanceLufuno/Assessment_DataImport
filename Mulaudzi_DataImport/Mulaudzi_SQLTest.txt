@@ -1,0 +1,269 @@
+--a)
+SELECT UltimateHoldingCompany, 
+       COUNT(*) AS PIE_Subsidiary_Count
+FROM test.Portfolio
+WHERE IsPIE = 1
+GROUP BY UltimateHoldingCompany
+HAVING COUNT(*) <= 2;
+
+--b
+SELECT DISTINCT(UltimateHoldingCompany) 
+FROM test.Portfolio 
+WHERE IsPIE = 1 
+   OR (Client IN (SELECT Client FROM test.ROI WHERE PublicInterestScore > 2000));
+
+--c
+SELECT DISTINCT(Employee) as Partner, SUM(ChargeableHours) as TotalHoursCharged FROM test.Timesheet
+  WHERE Position = 'Partner'
+  GROUP BY Employee
+
+SELECT DISTINCT
+    p.UltimateHoldingCompany,
+    CASE 
+        WHEN MAX(p.IsPIE) = 1 OR MAX(r.PublicInterestScore) > 2000 THEN 1 
+        ELSE 0 
+    END AS IsUltimateHoldingCompanyPIE
+FROM 
+    test.Portfolio p
+LEFT JOIN 
+    test.ROI r ON p.Client = r.Client
+GROUP BY 
+    p.UltimateHoldingCompany
+HAVING 
+    CASE 
+        WHEN MAX(p.IsPIE) = 1 OR MAX(r.PublicInterestScore) > 2000 THEN 1 
+        ELSE 0 
+    END = 1;
+
+--d
+
+--i.	Group hours per UltimateHoldingCompany and signing partner. 
+
+SELECT 
+    UltimateHoldingCompany,
+    Employee AS SigningPartner,
+    SUM(ChargeableHours) AS TotalHours
+FROM 
+    test.Timesheet
+WHERE 
+    Position LIKE '%Partner%'
+GROUP BY 
+    UltimateHoldingCompany, 
+    Employee
+ORDER BY 
+    UltimateHoldingCompany, 
+    SigningPartner;
+
+
+--ii.	Group billed amount per UltimateHoldingCompany and invoice.\
+
+SELECT 
+    UltimateHoldingCompany,
+    InvoiceNumber,
+    SUM(BilledAmount) AS TotalBilledAmount
+FROM 
+    test.Revenue
+GROUP BY 
+    UltimateHoldingCompany, 
+    InvoiceNumber
+ORDER BY 
+    UltimateHoldingCompany, 
+    InvoiceNumber;
+
+--iii.	Add a calculated column to the result-set to show TotalBilledAmount at the UltimateHoldingCompany level. 
+WITH CompanyTotals AS (
+    SELECT 
+        UltimateHoldingCompany,
+        SUM(BilledAmount) AS TotalBilledAmountForCompany
+    FROM 
+        test.Revenue
+    GROUP BY 
+        UltimateHoldingCompany
+)
+SELECT 
+    t.UltimateHoldingCompany,
+    t.InvoiceNumber,
+    SUM(t.BilledAmount) AS TotalBilledAmountPerInvoice,
+    ct.TotalBilledAmountForCompany
+FROM 
+    test.Revenue t
+JOIN 
+    CompanyTotals ct
+    ON t.UltimateHoldingCompany = ct.UltimateHoldingCompany
+GROUP BY 
+    t.UltimateHoldingCompany,
+    t.InvoiceNumber,
+    ct.TotalBilledAmountForCompany
+ORDER BY 
+    t.UltimateHoldingCompany,
+    t.InvoiceNumber;
+
+--iv.	The script should dynamically return data between the beginning of the previous calendar year and end of the previous calendar (Posting date should be used for this). 
+WITH CompanyTotals AS (
+    SELECT 
+        UltimateHoldingCompany,
+        SUM(BilledAmount) AS TotalBilledAmountForCompany
+    FROM 
+        test.Revenue
+    WHERE 
+        YEAR(PostingDate) = YEAR(GETDATE()) - 1
+		--test with the condition below, the one above will not work since the table 
+		--does not have any invoices posted in 2023 (Invoices were all posted in 2021)
+		--YEAR(PostingDate) = YEAR(GETDATE()) - 3
+
+    GROUP BY 
+        UltimateHoldingCompany
+)
+SELECT 
+    t.UltimateHoldingCompany,
+    t.InvoiceNumber,
+    SUM(t.BilledAmount) AS TotalBilledAmountPerInvoice,
+    ct.TotalBilledAmountForCompany
+FROM 
+    test.Revenue t
+JOIN 
+    CompanyTotals ct
+    ON t.UltimateHoldingCompany = ct.UltimateHoldingCompany
+WHERE 
+    YEAR(PostingDate) = YEAR(GETDATE()) - 1
+		--test with the condition below, the one above will not work since the table 
+		--does not have any invoices posted in 2023 (Invoices were all posted in 2021)
+		--YEAR(PostingDate) = YEAR(GETDATE()) - 3
+GROUP BY 
+    t.UltimateHoldingCompany,
+    t.InvoiceNumber,
+    ct.TotalBilledAmountForCompany
+ORDER BY 
+    t.UltimateHoldingCompany,
+    t.InvoiceNumber;
+
+--v.	Return only singing partner data.
+WITH CompanyTotals AS (
+    SELECT 
+        r.UltimateHoldingCompany,
+        SUM(r.BilledAmount) AS TotalBilledAmountForCompany
+    FROM 
+        test.Revenue r
+    WHERE 
+        YEAR(r.PostingDate) = YEAR(GETDATE()) - 1
+    GROUP BY 
+        r.UltimateHoldingCompany
+)
+SELECT 
+    r.UltimateHoldingCompany,
+    r.InvoiceNumber,
+    SUM(r.BilledAmount) AS TotalBilledAmountPerInvoice,
+    ct.TotalBilledAmountForCompany
+FROM 
+    test.Revenue r
+JOIN 
+    CompanyTotals ct ON r.UltimateHoldingCompany = ct.UltimateHoldingCompany
+JOIN 
+    test.Timesheet t ON r.UltimateHoldingCompany = t.UltimateHoldingCompany
+                         AND r.Client = t.Client
+WHERE 
+    YEAR(r.PostingDate) = YEAR(GETDATE()) - 1
+    AND t.Position = 'Partner'
+GROUP BY 
+    r.UltimateHoldingCompany,
+    r.InvoiceNumber,
+    ct.TotalBilledAmountForCompany
+ORDER BY 
+    r.UltimateHoldingCompany,
+    r.InvoiceNumber;
+
+--vi.	Order data by UltimateHoldingCompany, client, posting date.
+WITH CompanyTotals AS (
+    SELECT 
+        r.UltimateHoldingCompany,
+        SUM(r.BilledAmount) AS TotalBilledAmountForCompany
+    FROM 
+        test.Revenue r
+    WHERE 
+        YEAR(r.PostingDate) = YEAR(GETDATE()) - 1
+    GROUP BY 
+        r.UltimateHoldingCompany
+)
+SELECT 
+    r.UltimateHoldingCompany,
+    r.Client,
+    r.InvoiceNumber,
+    r.PostingDate,
+    SUM(r.BilledAmount) AS TotalBilledAmountPerInvoice,
+    ct.TotalBilledAmountForCompany
+FROM 
+    test.Revenue r
+JOIN 
+    CompanyTotals ct ON r.UltimateHoldingCompany = ct.UltimateHoldingCompany
+JOIN 
+    test.Timesheet t ON r.UltimateHoldingCompany = t.UltimateHoldingCompany
+                         AND r.Client = t.Client
+WHERE 
+    YEAR(r.PostingDate) = YEAR(GETDATE()) - 1
+    AND t.Position = 'Partner'
+GROUP BY 
+    r.UltimateHoldingCompany,
+    r.Client,
+    r.InvoiceNumber,
+    r.PostingDate,
+    ct.TotalBilledAmountForCompany
+ORDER BY 
+    r.UltimateHoldingCompany,
+    r.Client,
+    r.PostingDate;
+
+--vii.	NB: If the total value appears multiple times (duplicated per grouping), show the totals at the top-most record per grouping and other records within the grouping must show zero.
+
+WITH CompanyTotals AS (
+    SELECT 
+        r.UltimateHoldingCompany,
+        SUM(r.BilledAmount) AS TotalBilledAmountForCompany
+    FROM 
+        test.Revenue r
+    WHERE 
+        YEAR(r.PostingDate) = YEAR(GETDATE()) - 1
+    GROUP BY 
+        r.UltimateHoldingCompany
+),
+RankedBilling AS (
+    SELECT
+        r.UltimateHoldingCompany,
+        r.Client,
+        r.InvoiceNumber,
+        r.PostingDate,
+        SUM(r.BilledAmount) AS TotalBilledAmountPerInvoice,
+        ct.TotalBilledAmountForCompany,
+        ROW_NUMBER() OVER (PARTITION BY r.UltimateHoldingCompany ORDER BY r.PostingDate, r.InvoiceNumber) AS RowNum
+    FROM 
+        test.Revenue r
+    JOIN 
+        CompanyTotals ct ON r.UltimateHoldingCompany = ct.UltimateHoldingCompany
+    JOIN 
+        test.Timesheet t ON r.UltimateHoldingCompany = t.UltimateHoldingCompany
+                             AND r.Client = t.Client
+    WHERE 
+        YEAR(r.PostingDate) = YEAR(GETDATE()) - 1
+        AND t.Position = 'Partner'
+    GROUP BY 
+        r.UltimateHoldingCompany,
+        r.Client,
+        r.InvoiceNumber,
+        r.PostingDate,
+        ct.TotalBilledAmountForCompany
+)
+SELECT
+    UltimateHoldingCompany,
+    Client,
+    InvoiceNumber,
+    PostingDate,
+    TotalBilledAmountPerInvoice,
+    CASE 
+        WHEN RowNum = 1 THEN TotalBilledAmountForCompany
+        ELSE 0
+    END AS TotalBilledAmountForCompany
+FROM
+    RankedBilling
+ORDER BY 
+    UltimateHoldingCompany,
+    Client,
+    PostingDate;
